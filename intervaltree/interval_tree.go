@@ -53,7 +53,7 @@ func (n *node) insert(x, y uint64, pRef **node) {
 				n.I = n.Left.I
 				n.Left = n.Left.Left
 			} else { // Try to take child from our child
-				n.I = n.Left.tryJoinGreatest(x, n, &n.Left)
+				n.I = n.Left.tryJoinGreatestFirst(x, &n.Left)
 			}
 			return
 		}
@@ -79,7 +79,7 @@ func (n *node) insert(x, y uint64, pRef **node) {
 			n.J = n.Right.J
 			n.Right = n.Right.Right
 		} else { // Try to take child from our child
-			n.J = n.Right.tryJoinLeast(x, n, &n.Right)
+			n.J = n.Right.tryJoinLeastFirst(x, &n.Right)
 		}
 		return
 	}
@@ -123,11 +123,33 @@ func (n *node) getHeight() uint8 {
 	return n.height
 }
 
+// tryJoinGreatestFirst starts a tryJoinGreatest invocation chain. The first
+// case is special (nRef is not &p.Right), thats why this function exists.
+func (n *node) tryJoinGreatestFirst(x uint64, nRef **node) uint64 {
+	if n.Right == nil {
+		return x
+	}
+
+	defer n.rebalance(nRef)
+	return n.Right.tryJoinGreatest(x, n)
+}
+
+// tryJoinLeastFirst starts a tryJoinLeast invocation chain. The first case is
+// special (nRef is not &p.Left), thats why this function exists.
+func (n *node) tryJoinLeastFirst(x uint64, nRef **node) uint64 {
+	if n.Left == nil {
+		return x
+	}
+
+	defer n.rebalance(nRef)
+	return n.Left.tryJoinLeast(x, n)
+}
+
 // tryJoinGreatest returns the lower endpoint of the greatest interval in the
 // children of n if its upper endpoint is a neighbour of x and also removes this
 // interval. Otherwise it returns x.
-func (n *node) tryJoinGreatest(x uint64, p *node, nRef **node) uint64 {
-	defer n.rebalance(nRef)
+func (n *node) tryJoinGreatest(x uint64, p *node) uint64 {
+	defer n.rebalance(&p.Right)
 	if n.Right == nil { // n is the greatest interval
 		if n.J == x-1 { // n neighbours
 			p.Right = n.Left
@@ -135,14 +157,14 @@ func (n *node) tryJoinGreatest(x uint64, p *node, nRef **node) uint64 {
 		}
 		return x
 	}
-	return n.Right.tryJoinGreatest(x, n, &n.Right)
+	return n.Right.tryJoinGreatest(x, n)
 }
 
 // tryJoinLeast returns the upper endpoint of the least interval in the children
 // of n if its lower endpoint is a neighbour of x and also removes this
 // interval. Otherwise it returns x.
-func (n *node) tryJoinLeast(y uint64, p *node, nRef **node) uint64 {
-	defer n.rebalance(nRef)
+func (n *node) tryJoinLeast(y uint64, p *node) uint64 {
+	defer n.rebalance(&p.Left)
 	if n.Left == nil { // n is the least interval
 		if n.I == y+1 { // n neighbours
 			p.Left = n.Right
@@ -150,7 +172,7 @@ func (n *node) tryJoinLeast(y uint64, p *node, nRef **node) uint64 {
 		}
 		return y
 	}
-	return n.Left.tryJoinLeast(y, n, &n.Left)
+	return n.Left.tryJoinLeast(y, n)
 }
 
 // rotateLeft performs a left tree rotation.
