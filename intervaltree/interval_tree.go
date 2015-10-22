@@ -37,7 +37,13 @@ func newNode(x, y uint64) *node {
 
 // insert adds the interval [x, y] to the tree. [x, y] cannot overlap with the
 // current tree. If prunning can be done it will be done.
-func (n *node) insert(x, y uint64, pRef **node) {
+func (n *node) insert(x, y uint64, pRef **node) error {
+	if x < n.I && y >= n.I {
+		return OverlapError(n.I)
+	} else if x >= n.I && x <= n.J {
+		return OverlapError(x)
+	}
+
 	defer n.rebalance(pRef)
 
 	// New interval is to the left of this nodes interval
@@ -45,7 +51,7 @@ func (n *node) insert(x, y uint64, pRef **node) {
 		if n.I == y+1 { // Neighbour, expand current interval
 			if n.Left == nil {
 				n.I = x
-				return
+				return nil
 			}
 
 			// Check if we can join with a child interval
@@ -53,25 +59,30 @@ func (n *node) insert(x, y uint64, pRef **node) {
 				n.I = n.Left.I
 				n.Left = n.Left.Left
 			} else { // Try to take child from our child
-				n.I = n.Left.tryJoinGreatestFirst(x, &n.Left)
+				g, err := n.Left.tryJoinGreatestFirst(x, &n.Left)
+				if err != nil {
+					return err
+				}
+				n.I = g
 			}
-			return
+			return nil
 		}
 
 		// Not neighbouring
 		if n.Left == nil { // Create child
 			n.Left = newNode(x, y)
-		} else {
-			n.Left.insert(x, y, &n.Left) // We have a child, let it handle this interval
+			return nil
 		}
-		return
+
+		// We have a child, let it handle this interval
+		return n.Left.insert(x, y, &n.Left)
 	}
 
 	// New interval is to the right of this nodes interval
 	if n.J == x-1 { // Neighbour, expand current interval
 		if n.Right == nil {
 			n.J = y
-			return
+			return nil
 		}
 
 		// Check if we can join with a child interval
@@ -79,17 +90,23 @@ func (n *node) insert(x, y uint64, pRef **node) {
 			n.J = n.Right.J
 			n.Right = n.Right.Right
 		} else { // Try to take child from our child
-			n.J = n.Right.tryJoinLeastFirst(x, &n.Right)
+			l, err := n.Right.tryJoinLeastFirst(y, &n.Right)
+			if err != nil {
+				return err
+			}
+			n.J = l
 		}
-		return
+		return nil
 	}
 
 	// Not neighbouring
 	if n.Right == nil { // Create child
 		n.Right = newNode(x, y)
-	} else {
-		n.Right.insert(x, y, &n.Right) // We have a child, let it handle this interval
+		return nil
 	}
+
+	// We have a child, let it handle this interval
+	return n.Right.insert(x, y, &n.Right)
 }
 
 // rebalance fixes AVL invariants violations by applying rotations.
@@ -125,9 +142,12 @@ func (n *node) getHeight() uint8 {
 
 // tryJoinGreatestFirst starts a tryJoinGreatest invocation chain. The first
 // case is special (nRef is not &p.Right), thats why this function exists.
-func (n *node) tryJoinGreatestFirst(x uint64, nRef **node) uint64 {
+func (n *node) tryJoinGreatestFirst(x uint64, nRef **node) (uint64, error) {
+	if x <= n.J {
+		return x, OverlapError(n.J)
+	}
 	if n.Right == nil {
-		return x
+		return x, nil
 	}
 
 	defer n.rebalance(nRef)
@@ -136,26 +156,32 @@ func (n *node) tryJoinGreatestFirst(x uint64, nRef **node) uint64 {
 
 // tryJoinLeastFirst starts a tryJoinLeast invocation chain. The first case is
 // special (nRef is not &p.Left), thats why this function exists.
-func (n *node) tryJoinLeastFirst(x uint64, nRef **node) uint64 {
+func (n *node) tryJoinLeastFirst(y uint64, nRef **node) (uint64, error) {
+	if y >= n.I {
+		return y, OverlapError(n.I)
+	}
 	if n.Left == nil {
-		return x
+		return y, nil
 	}
 
 	defer n.rebalance(nRef)
-	return n.Left.tryJoinLeast(x, n)
+	return n.Left.tryJoinLeast(y, n)
 }
 
 // tryJoinGreatest returns the lower endpoint of the greatest interval in the
 // children of n if its upper endpoint is a neighbour of x and also removes this
 // interval. Otherwise it returns x.
-func (n *node) tryJoinGreatest(x uint64, p *node) uint64 {
+func (n *node) tryJoinGreatest(x uint64, p *node) (uint64, error) {
 	defer n.rebalance(&p.Right)
 	if n.Right == nil { // n is the greatest interval
+		if x <= n.J {
+			return x, OverlapError(n.J)
+		}
 		if n.J == x-1 { // n neighbours
 			p.Right = n.Left
-			return n.I
+			return n.I, nil
 		}
-		return x
+		return x, nil
 	}
 	return n.Right.tryJoinGreatest(x, n)
 }
@@ -163,14 +189,17 @@ func (n *node) tryJoinGreatest(x uint64, p *node) uint64 {
 // tryJoinLeast returns the upper endpoint of the least interval in the children
 // of n if its lower endpoint is a neighbour of x and also removes this
 // interval. Otherwise it returns x.
-func (n *node) tryJoinLeast(y uint64, p *node) uint64 {
+func (n *node) tryJoinLeast(y uint64, p *node) (uint64, error) {
 	defer n.rebalance(&p.Left)
 	if n.Left == nil { // n is the least interval
+		if y >= n.I {
+			return y, OverlapError(n.I)
+		}
 		if n.I == y+1 { // n neighbours
 			p.Left = n.Right
-			return n.J
+			return n.J, nil
 		}
-		return y
+		return y, nil
 	}
 	return n.Left.tryJoinLeast(y, n)
 }
@@ -282,15 +311,19 @@ func (t *IntervalTree) Next(x uint64) uint64 {
 
 // Insert adds an interval to the tree. The interval cannot overlap with the
 // tree. If prunning is possible it will be done.
-func (t *IntervalTree) Insert(x, y uint64) {
+func (t *IntervalTree) Insert(x, y uint64) error {
+	if x > y {
+		return InvalidIntervalError{x, y}
+	}
+
 	t.Lock()
 	defer t.Unlock()
 	if t.root == nil { // First interval
 		t.root = newNode(x, y)
-		return
+		return nil
 	}
 
-	t.root.insert(x, y, &t.root)
+	return t.root.insert(x, y, &t.root)
 }
 
 // New returns a pointer to an empty IntervalTree.
